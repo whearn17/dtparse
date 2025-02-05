@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import argparse
 import codecs
 import logging
@@ -15,7 +16,6 @@ except ImportError:
 def parse_unicode_string(string: str) -> str:
     """
     Parse a string that might contain Unicode escape sequences.
-    
     Handles both regular characters and Unicode escape sequences.
     """
     try:
@@ -54,7 +54,12 @@ def process_file_listing(args):
         sys.exit(1)
 
     # --- Enhanced Unicode Support ---
-    ignore_chars = parse_unicode_string(args.character_ignore_list)
+    # Use the base ignore list plus any characters in the blocklist for indentation purposes.
+    base_ignore = parse_unicode_string(args.character_ignore_list)
+    if hasattr(args, "blocklist") and args.blocklist:
+        ignore_chars = base_ignore + ''.join(args.blocklist)
+    else:
+        ignore_chars = base_ignore
 
     # Determine the correct path separator
     path_separator = "/" if args.unix_separators else "\\"
@@ -76,6 +81,12 @@ def process_file_listing(args):
 
         starting_position = find_file_or_directory_name_start_position(line, ignore_chars)
         file_or_directory_name = line[starting_position:].strip()
+        
+        # Remove blocked characters from the extracted name.
+        if hasattr(args, 'blocklist') and args.blocklist:
+            for ch in args.blocklist:
+                file_or_directory_name = file_or_directory_name.replace(ch, "")
+
         current_directory_level = int(starting_position / args.indent_level)
 
         # --- Enhanced Logging and Debugging ---
@@ -83,7 +94,7 @@ def process_file_listing(args):
         logging.debug(f"Starting position: {starting_position}")
         if starting_position < len(line):
             logging.debug(f"Stop character: {line[starting_position]}")
-        logging.debug(f"Extracted name: {file_or_directory_name}")
+        logging.debug(f"Extracted name (after blocking): {file_or_directory_name}")
         logging.debug(f"Current directory level: {current_directory_level}")
         logging.debug(f"Current path stack: {path_separator.join(path_stack)}")
 
@@ -118,13 +129,16 @@ def character_detection_mode(args):
     """
     Interactively step through each non-empty line in the input file,
     display the current stop character (the first character not in the ignore list),
-    and allow the user to add that character to a blocklist.
-    
-    Key Bindings:
-      s - step to the next line
-      b - block (add) the current character to the blocklist
-      r - run the file listing conversion with the current blocklist
-      q - quit the character detection mode without running conversion
+    and allow the user to:
+      - [s] Step forward
+      - [p] Step backward (if desired)
+      - [b] Block (add) the current character to the blocklist
+      - [u] Unblock a character from the blocklist
+      - [r] Run conversion with current blocklist
+      - [q] Quit detection mode without running conversion
+
+    In detection mode the "current ignore list" is computed as the base ignore
+    plus the blocklist. That way, once a character is blocked it will be skipped.
     """
     # --- Input File Validation and Error Handling ---
     if not os.path.isfile(args.input_file):
@@ -141,15 +155,24 @@ def character_detection_mode(args):
     base_ignore = parse_unicode_string(args.character_ignore_list)
 
     print("\n=== Entering Character Detection Mode ===")
-    print("Key Bindings: [s]tep, [b]lock current char, [r]un conversion with current blocklist, [q]uit")
+    print("Key Bindings:")
+    print("  [s] Step forward")
+    print("  [p] Step backward")
+    print("  [b] Block current char")
+    print("  [u] Unblock a char")
+    print("  [r] Run conversion with current blocklist")
+    print("  [q] Quit detection mode")
     
-    for idx, line in enumerate(file_listing_lines):
+    i = 0
+    while i < len(file_listing_lines):
+        line = file_listing_lines[i]
         if line.strip() == "":
+            i += 1
             continue
 
-        # Allow multiple passes on the same line if the user keeps blocking characters
         while True:
-            # Update ignore list by combining the base ignore characters and any blocked ones
+            # In detection mode, use the union of base_ignore and blocklist
+            # so that blocked characters are skipped.
             current_ignore = base_ignore + ''.join(blocklist)
             starting_position = find_file_or_directory_name_start_position(line, current_ignore)
             if starting_position < len(line):
@@ -157,7 +180,7 @@ def character_detection_mode(args):
             else:
                 current_char = None
 
-            print(f"\nLine {idx+1}: {line.rstrip()}")
+            print(f"\nLine {i+1}: {line.rstrip()}")
             print(f"Current ignore list: {repr(current_ignore)}")
             print(f"Blocklist: {blocklist}")
             print(f"Detected starting position: {starting_position}")
@@ -166,26 +189,47 @@ def character_detection_mode(args):
             else:
                 print("No non-ignored character found on this line.")
 
-            key = input("Press [s] to step, [b] to block current char, [r] to run conversion, or [q] to quit: ").strip().lower()
+            key = input("Press [s] to step forward, [p] to step backward, [b] to block current char, [u] to unblock a char, [r] to run conversion, or [q] to quit: ").strip().lower()
             if key == 'b':
                 if current_char is None:
-                    print("Nothing to block on this line; stepping to the next line.")
+                    print("Nothing to block on this line; stepping forward.")
                     break
                 if current_char in blocklist:
                     print(f"Character '{current_char}' is already blocked.")
                 else:
                     blocklist.append(current_char)
                     print(f"Added '{current_char}' to blocklist.")
-                    # Recalculate the starting position for the same line with the updated ignore list.
+                    # Recalculate starting position for this line with the updated blocklist.
                     continue
+            elif key == 'u':
+                if not blocklist:
+                    print("Blocklist is empty. Nothing to unblock.")
+                else:
+                    print("Current blocklist:", blocklist)
+                    to_unblock = input("Enter the character you want to unblock (you can use Unicode escapes, e.g., '\\u00A0'): ").strip()
+                    to_unblock = parse_unicode_string(to_unblock)
+                    if to_unblock in blocklist:
+                        blocklist.remove(to_unblock)
+                        print(f"Removed '{to_unblock}' from blocklist.")
+                    else:
+                        print(f"Character '{to_unblock}' is not in the blocklist.")
+                    continue  # Reprocess the same line with the updated blocklist.
             elif key == 'r':
-                # Update the args' ignore list with the current blocklist
-                args.character_ignore_list = base_ignore + ''.join(blocklist)
+                # Save the blocklist in args (do not change the base ignore list).
+                args.blocklist = blocklist
                 print("\nRunning file listing conversion with the current blocklist...")
                 process_file_listing(args)
                 return
             elif key == 's':
-                break  # Move to next line.
+                i += 1
+                break  # Move to the next line.
+            elif key == 'p':
+                if i > 0:
+                    i -= 1
+                    break  # Step back one line.
+                else:
+                    print("Already at the first line; cannot step backwards.")
+                    continue
             elif key == 'q':
                 print("Quitting character detection mode.")
                 print("Final blocklist:", blocklist)
