@@ -138,23 +138,23 @@ if __name__ == "__main__":
 
         current_directory_level = int(starting_position / args.indent_level)
 
-        while current_directory_level < len(path_stack) - 1:
-            path_stack.pop()
-
-        if current_directory_level == len(path_stack) and not len(path_stack) == 0:
-            path_stack.pop()
-
-        path_stack.append(file_or_directory_name)
-
         if args.debug:
             print(f"Working on line: {line.strip()}")
             print(f"Starting position of file or directory: {starting_position}")
             print(f"Stop character: {line[starting_position]}")
             print(f"Extracted file or directory name: {file_or_directory_name}")
-            print(f"Current directory level: {current_directory_level}\n")
+            print(f"Current directory level: {current_directory_level}")
+            print(f"Length of path stack {len(path_stack)}")
+            print(f"Current path stack: {f'{path_separators}'.join(map(str, path_stack))}\n")
             time.sleep(1)
 
-        # print(f"Current path stack: {f'{path_separators}'.join(map(str, path_stack))}")
+        while current_directory_level < len(path_stack) - 1:
+            path_stack.pop()
+
+        if current_directory_level == len(path_stack) - 1 and not len(path_stack) - 1 == 0:
+            path_stack.pop()
+
+        path_stack.append(file_or_directory_name)
 
         if args.output_file:
             output_file.write(f'{path_separators}'.join(map(str, path_stack)))
